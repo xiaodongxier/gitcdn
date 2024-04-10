@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>时间锁</title>
+  <base target="_blank">
+  <style>
+    body, input {
+      font-family: monospace;
+      font-size: 15px;
+    }
+    input {
+      width: 20em;
+    }
+    #txtPlain, #txtCipher {
+      width: 100%;
+      height: 5em;
+    }
+    #progressBar {
+      width: 20em;
+    }
+    #txtError {
+      height: 1em;
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <div>👁 明文:</div>
+  <div>
+    <textarea id="txtPlain"></textarea>
+  </div>
+  <div>
+    🔑 密钥: <input id="txtKey" type="text">
+    <button id="btnGenKey">🎲 随机生成</button>
+  </div>
+  <div>
+    ⏰ 难度: <input id="txtIter" type="number" value="10" min="1">
+  </div>
+  <div>
+    ⏳ 进度: <progress id="progressBar" value="0" max="100"></progress>
+    <span id="txtProgVal"></span>/<span id="txtProgMax"></span>
+    (<span id="txtProgPercent"></span>%)
+    剩余时间 <span id="txtTime">-</span>
+  </div>
+  <div>
+    <button id="btnEncrypt">🔽 加密</button>
+    <button id="btnDecrypt">🔼 解密</button>
+    <button id="btnPause">⏸️ 暂停</button>
+    <button id="btnResume">⏯️ 继续</button>
+    <button id="btnStop">⏹️ 停止</button>
+    <button id="btnShare">🔗 分享</button>
+  </div>
+  <div>🔐 密文:</div>
+  <div>
+    <textarea id="txtCipher"></textarea>
+  </div>
+  <div>
+    <div id="txtError"></div>
+  </div>
+  <p>💡 提示:</p>
+  <p>
+    发送者对明文进行加密，难度越大解密越慢，迫使接收者必须经过一定时间才能解开密文。目前主流 CPU 每 1 难度用时大约 1 秒。
+  </p>
+  <p>
+    本程序能耗大，不建议在移动端运行。PC 端建议使用 Chrome，性能更高。如果页面被暂停运行，可尝试放在单独的窗口中。
+  </p>
+  <p>
+    如何加速解密？单核性能越高，解密速度越快。多核或显卡性能对解密速度无提升。如果用 FPGA 甚至专用芯片解密，速度还能大幅提升。
+  </p>
+  <p>
+    能否瞬间加密？理论上可以，参考[<a href="https://people.csail.mit.edu/rivest/pubs/RSW96.pdf">这篇论文</a>]，但浏览器未提供相关 API，即使通过 WebAssembly 实现，解密性能仍比被原生低很多，没有必要在网页中解密。因此本程序使用浏览器内置的 PBKDF2 作为延时函数，避免额外开销，但缺点是加密和解密一样慢。当然实际应用时可离线计算，预先生成密钥池，也可达到瞬间加密的效果。
+  </p>
+  <script type="module">
+    // Vanilla JS
+    const {subtle} = crypto
+
+    async function pbkdf2(pwd, opts, bits) {
+      const baseKey = await subtle.importKey('raw', pwd, 'PBKDF2', false, ['deriveBits'])
+      return await subtle.deriveBits(opts, baseKey, bits)
+    }
+
+    async function aesEncrypt(plain, key, iv) {
+      const baseKey = await subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt'])
+      const buf = await subtle.encrypt({name: 'AES-GCM', iv}, baseKey, plain)
+      return new Uint8Array(buf)
+    }
+
+    async function aesDecrypt(cipher, key, iv) {
+      const baseKey = await subtle.importKey('raw', key, 'AES-GCM', false, ['decrypt'])
+      const buf = await subtle.decrypt({name: 'AES-GCM', iv}, baseKey, cipher)
+      return new Uint8Array(buf)
+    }
+
+    function str2bin(str) {
+      return new TextEncoder().encode(str)
+    }
+
+    function bin2str(bin) {
+      return new TextDecoder().decode(bin)
+    }
+
+    function hex2bin(str) {
+      const hex = str.trim().match(/^0x((?:[0-9A-F]{2})+)$/i)?.[1]
+      if (!hex) {
+        return
+      }
+      const bin = new Uint8Array(hex.length / 2)
+      for (let i = 0; i < hex.length; i += 2) {
+        bin[i / 2] = parseInt(hex[i] + hex[i + 1], 16)
+      }
+      return bin
+    }
+
+    function bin2hex(bin) {
+      const hex = [...bin]
+        .map(v => v.toString(16).padStart(2, '0'))
+        .join('')
+      return '0x' + hex.toUpperCase()
+    }
+
+    function createSignal() {
+      let callback
+      const promise = new Promise(resolve => {
+        callback = resolve
+      })
+      promise.notify = callback
+      return promise
+    }
+
+    function formatTime(sec) {
+      const time = new Date(sec * 1000).toISOString().slice(11, 19)
+      const day = sec / 86400 | 0
+      if (day) {
+        return `${day}天${time}`
+      }
+      return time
+    }
+
+    btnGenKey.onclick = function() {
+      const bin = crypto.getRandomValues(new Uint8Array(8))
+      txtKey.value = bin2hex(bin)
+    }
+
+    let isStopped = true
+    let pausedSignal
+
+    async function computeKey() {
+      let keyBin = hex2bin(txtKey.value)
+      if (!keyBin) {
+        showError('无效的密钥')
+        return
+      }
+      showError('')
+
+      const pbkdfOpts = {
+        name: 'PBKDF2',
+        hash: 'SHA-256',
+        salt: new Uint8Array(0),
+        iterations: 1e7,
+      }
+      const iterNum = +txtIter.value
+      isStopped = false
+      txtTime.textContent = '评估中...'
+
+      //
+      // 由于 PBKDF2 不支持回调，因此无法查看进度
+      // 此外迭代次数有上限，因此无法长时间运行
+      // 本程序通过多次调用 PBKDF2 的方式规避这些问题
+      //
+      for (let i = 1; i <= iterNum; i++) {
+        const t0 = Date.now()
+        keyBin = await pbkdf2(keyBin, pbkdfOpts, 256)
+        const t1 = Date.now()
+
+        const elapsedSec = (t1 - t0) / 1000
+        const remainIter = iterNum - i
+        txtTime.textContent = formatTime(Math.ceil(remainIter * elapsedSec))
+
+        updateProgress(i, iterNum)
+
+        if (pausedSignal) {
+          showError('计算暂停')
+          await pausedSignal
+          showError('')
+        }
+        if (isStopped) {
+          updateProgress(0, iterNum)
+          showError('计算终止')
+          keyBin = undefined
+          break
+        }
+      }
+
+      txtTime.textContent = '-'
+      isStopped = true
+      return keyBin
+    }
+
+    btnEncrypt.onclick = async function() {
+      if (!isStopped) {
+        return
+      }
+      const plain = str2bin(txtPlain.value)
+      if (plain.length === 0) {
+        showError('明文为空')
+        return
+      }
+      txtCipher.value = ''
+      updateButtonState()
+
+      const key = await computeKey()
+      if (!key) {
+        return
+      }
+      const cipher = await aesEncrypt(plain, key, new Uint8Array(16))
+      txtCipher.value = bin2hex(cipher)
+    }
+
+    btnDecrypt.onclick = async function() {
+      if (!isStopped) {
+        return
+      }
+      const cipher = hex2bin(txtCipher.value)
+      if (!cipher) {
+        showError('无效的密文')
+        return
+      }
+      txtPlain.value = ''
+      updateButtonState()
+
+      const key = await computeKey()
+      if (!key) {
+        return
+      }
+      try {
+        const plain = await aesDecrypt(cipher, key, new Uint8Array(16))
+        txtPlain.value = bin2str(plain)
+      } catch (err) {
+        showError('解密失败')
+      }
+    }
+
+    btnPause.onclick = function() {
+      if (isStopped) {
+        return
+      }
+      if (pausedSignal) {
+        return
+      }
+      pausedSignal = createSignal()
+    }
+
+    btnResume.onclick = function() {
+      if (!pausedSignal) {
+        return
+      }
+      pausedSignal.notify()
+      pausedSignal = undefined
+    }
+
+    btnStop.onclick = function() {
+      if (isStopped) {
+        return
+      }
+      if (confirm('确定停止?')) {
+        btnResume.onclick()
+        isStopped = true
+      }
+    }
+
+    btnShare.onclick = function() {
+      const url = new URL(location.href)
+      url.hash = new URLSearchParams({
+        'iter': txtIter.value,
+        'key': txtKey.value,
+        'cipher': txtCipher.value,
+      })
+      navigator.clipboard.writeText(url)
+      alert('密文链接已复制')
+    }
+
+    function updateProgress(val, max) {
+      const percent = (val / max) * 100
+      progressBar.value = percent
+
+      txtProgPercent.textContent = percent.toFixed(2)
+      txtProgMax.textContent = max
+      txtProgVal.textContent = val
+    }
+
+    function updateButtonState() {
+      btnEncrypt.disabled = !txtPlain.value
+      btnDecrypt.disabled = !txtCipher.value
+    }
+
+    function showError(msg) {
+      txtError.textContent = msg
+    }
+
+    window.onbeforeunload = function() {
+      if (!isStopped) {
+        return '正在计算中，是否离开'
+      }
+    }
+
+    txtPlain.oninput = txtCipher.oninput = updateButtonState
+
+    function updateParams() {
+      const params = new URLSearchParams(location.hash.substring(1))
+      const KEY_TEXTBOX_MAP = {
+        'key': txtKey,
+        'iter': txtIter,
+        'plain': txtPlain,
+        'cipher': txtCipher,
+      }
+      for (const [k, v] of Object.entries(KEY_TEXTBOX_MAP)) {
+        if (params.has(k)) {
+          v.value = params.get(k)
+        }
+      }
+      updateButtonState()
+    }
+    window.onhashchange = updateParams
+
+
+    function main() {
+      updateParams()
+      updateProgress(0, +txtIter.value)
+
+      if (!isSecureContext) {
+        showError('本程序必须位于 HTTPS 或本地站点')
+      }
+    }
+    main()
+  </script>
+</body>
+</html>
